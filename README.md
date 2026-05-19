@@ -1,8 +1,8 @@
 ---
 title: Linebot
-emoji: 🐠
-colorFrom: green
-colorTo: yellow
+emoji: 🐢
+colorFrom: yellow
+colorTo: green
 sdk: docker
 pinned: false
 ---
