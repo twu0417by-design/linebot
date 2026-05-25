@@ -158,6 +158,18 @@ def home():
     return {"message": "LINE + Gemini Language Learning Bot"}
 
 
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    return {
+        "status": "ok",
+        "line_secret_set": bool(LINE_CHANNEL_SECRET),
+        "line_token_set": bool(LINE_CHANNEL_ACCESS_TOKEN),
+        "gemini_key_set": bool(GEMINI_API_KEY),
+        "supabase_configured": bool(SUPABASE_URL and SUPABASE_KEY),
+        "space_host_set": bool(SPACE_HOST),
+    }
+
+
 @app.route("/images/<filename>", methods=["GET"])
 def serve_image(filename: str):
     return send_from_directory(static_tmp_path, filename)
