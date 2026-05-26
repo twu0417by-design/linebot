@@ -48,18 +48,33 @@ create table if not exists daily_words (
   example text not null,
   created_at timestamptz default now()
 );
+
+create table if not exists chat_history (
+  id bigint generated always as identity primary key,
+  user_id text not null,
+  role text not null,
+  content text not null,
+  created_at timestamptz default now()
+);
 ```
 
-## 4) LINE 指令
+## 4) 升級版亮點功能
+- 🗣️ **多輪會話練習**：不需額外前綴，或使用 `會話:`，系統會自動載入最近的對話歷史，讓您與 AI 進行有前後文的連續會話練習。
+- 🔊 **語音原生播放**：輸入 `發音: <單字>`，系統除了文字說明外，會直接回傳 LINE 原生語音訊息（AudioMessage），可直接於聊天室點擊播放。
+- 📷 **圖片自動分析與記憶**：上傳圖片後，AI 除解說圖片外，會自動將 5 個相關英文單字直接匯入您的 Supabase 單字庫。
+- 💡 **每日單字自動入庫**：若單字庫中沒有單字，系統由 Gemini 產生的新單字會自動新增至 `daily_words` 表，持續擴充題庫。
+
+## 5) LINE 指令
 - `翻譯: <文章內容>`
 - `記憶新增: <分類>|<單字>|<中文意思>`
 - `記憶查詢`
 - `記憶查詢: <分類>`
-- `每日單字`
-- `會話: <你想練習或想修正的句子>`
-- `發音: <單字>`
-- `生圖: <描述>`
-- 直接上傳圖片：觸發圖片理解 + 圖像相關詞彙教學
+- `每日單字`（從單字庫隨機挑選，若無則由 AI 產生並自動入庫）
+- `會話: <你想練習或想修正的句子>`（支援多輪歷史記憶）
+- `發音: <單字>`（同時回傳文字解釋與可直接播放的語音訊息）
+- `生圖: <描述>`（採用最新 Imagen 3.0 圖像生成模型）
+- 直接上傳圖片：自動進行圖像理解，並自動將產生的單字匯入單字庫中
+
 
 ## 5) 啟動方式（Space 會自動使用）
 `Dockerfile` 已設定：

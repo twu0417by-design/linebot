@@ -7,3 +7,4 @@ google-genai
 Pillow
 supabase
 httpx
+pydantic
