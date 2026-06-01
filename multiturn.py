@@ -3,6 +3,7 @@ import tempfile
 import uuid
 import random
 import requests
+import json
 from io import BytesIO
 from urllib.parse import quote_plus
 
@@ -24,6 +25,7 @@ from linebot.v3.messaging import (
     ReplyMessageRequest,
     TextMessage,
     FlexMessage,
+    FlexContainer,
 )
 from linebot.v3.webhooks import ImageMessageContent, MessageEvent, TextMessageContent
 from supabase import Client, create_client
@@ -126,6 +128,7 @@ def make_translation_flex(result: TranslationResult) -> dict:
                     "size": "sm",
                     "action": {
                         "type": "message",
+                        "label": "發音",
                         "text": f"發音: {v.word}"
                     },
                     "flex": 1
@@ -595,6 +598,7 @@ def make_vocab_list_flex(rows: list, category: str | None) -> dict:
                     "size": "sm",
                     "action": {
                         "type": "message",
+                        "label": "發音",
                         "text": f"發音: {r.get('word', '')}"
                     },
                     "flex": 1
@@ -677,6 +681,7 @@ def make_image_analysis_flex(result: ImageAnalysisResult, saved_count: int) -> d
                     "size": "sm",
                     "action": {
                         "type": "message",
+                        "label": "發音",
                         "text": f"發音: {item.word}"
                     },
                     "flex": 1
@@ -1169,7 +1174,7 @@ def handle_text_message(event):
                 line_api.reply_message(
                     ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[FlexMessage(alt_text="翻譯與單字解析", contents=flex_content)],
+                        messages=[FlexMessage(alt_text="翻譯與單字解析", contents=FlexContainer.from_json(json.dumps(flex_content)))],
                     )
                 )
         else:
@@ -1190,7 +1195,7 @@ def handle_text_message(event):
         messages = []
         if result:
             flex_content = make_pronunciation_flex(result)
-            messages.append(FlexMessage(alt_text=f"發音與解析: {word}", contents=flex_content))
+            messages.append(FlexMessage(alt_text=f"發音與解析: {word}", contents=FlexContainer.from_json(json.dumps(flex_content))))
         else:
             messages.append(TextMessage(text=f"無法查詢單字 {word}，但已為您產出發音語音。"))
             
@@ -1229,7 +1234,7 @@ def handle_text_message(event):
                 line_api.reply_message(
                     ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[FlexMessage(alt_text="單字已成功入庫", contents=flex_content)],
+                        messages=[FlexMessage(alt_text="單字已成功入庫", contents=FlexContainer.from_json(json.dumps(flex_content)))],
                     )
                 )
         else:
@@ -1252,7 +1257,7 @@ def handle_text_message(event):
             line_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[FlexMessage(alt_text="我的單字庫", contents=flex_content)],
+                    messages=[FlexMessage(alt_text="我的單字庫", contents=FlexContainer.from_json(json.dumps(flex_content)))],
                 )
             )
         return
@@ -1266,7 +1271,7 @@ def handle_text_message(event):
                 line_api.reply_message(
                     ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[FlexMessage(alt_text="每日單字", contents=flex_content)],
+                        messages=[FlexMessage(alt_text="每日單字", contents=FlexContainer.from_json(json.dumps(flex_content)))],
                     )
                 )
         else:
@@ -1348,7 +1353,7 @@ def handle_image_message(event):
             line_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[FlexMessage(alt_text="圖片分析與學習結果", contents=flex_content)],
+                    messages=[FlexMessage(alt_text="圖片分析與學習結果", contents=FlexContainer.from_json(json.dumps(flex_content)))],
                 )
             )
     except Exception as e:
