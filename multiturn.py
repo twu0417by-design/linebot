@@ -23,6 +23,7 @@ from linebot.v3.messaging import (
     MessagingApiBlob,
     ReplyMessageRequest,
     TextMessage,
+    FlexMessage,
 )
 from linebot.v3.webhooks import ImageMessageContent, MessageEvent, TextMessageContent
 from supabase import Client, create_client
@@ -81,6 +82,703 @@ class TranslationVocabItem(BaseModel):
 class TranslationResult(BaseModel):
     translated_text: str = Field(description="翻譯後的完整文章，必須保留原段落")
     vocabularies: List[TranslationVocabItem] = Field(description="從文章中挑選出的 3-5 個關鍵詞彙與其解釋")
+
+
+class PronunciationResult(BaseModel):
+    word: str = Field(description="英文單字")
+    ipa_uk: str = Field(description="英式 IPA，例如: /əˈsəʊ.si.eɪt/")
+    ipa_us: str = Field(description="美式 IPA，例如: /əˈsoʊ.ʃi.eɪt/")
+    part_of_speech: str = Field(description="詞性，例如: v. 或 n.，有多個請用逗號隔開")
+    meaning: str = Field(description="中文解釋，有多個意思請簡短列出")
+    detail: str = Field(description="詳細用法、常見片語或小叮嚀（約50字）")
+
+
+# === Flex Message Generators ===
+
+def make_translation_flex(result: TranslationResult) -> dict:
+    vocab_contents = []
+    for v in result.vocabularies:
+        vocab_contents.append({
+            "type": "box",
+            "layout": "horizontal",
+            "margin": "md",
+            "alignItems": "center",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": v.word,
+                    "weight": "bold",
+                    "color": "#1DB446",
+                    "size": "sm",
+                    "flex": 4
+                },
+                {
+                    "type": "text",
+                    "text": v.meaning,
+                    "color": "#666666",
+                    "size": "sm",
+                    "flex": 6
+                },
+                {
+                    "type": "text",
+                    "text": "🔊",
+                    "align": "end",
+                    "size": "sm",
+                    "action": {
+                        "type": "message",
+                        "text": f"發音: {v.word}"
+                    },
+                    "flex": 1
+                }
+            ]
+        })
+    
+    bubble = {
+        "type": "bubble",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#050B24",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "📝 翻譯與單字解析",
+                    "color": "#ffffff",
+                    "weight": "bold",
+                    "size": "md"
+                }
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "中文翻譯：",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#8c8c8c"
+                },
+                {
+                    "type": "text",
+                    "text": result.translated_text,
+                    "wrap": True,
+                    "margin": "sm",
+                    "size": "md",
+                    "color": "#333333"
+                }
+            ]
+        }
+    }
+    
+    if vocab_contents:
+        bubble["body"]["contents"].extend([
+            {
+                "type": "separator",
+                "margin": "lg"
+            },
+            {
+                "type": "text",
+                "text": "💡 關鍵單字：",
+                "weight": "bold",
+                "size": "sm",
+                "color": "#8c8c8c",
+                "margin": "md"
+            },
+            {
+                "type": "box",
+                "layout": "vertical",
+                "contents": vocab_contents
+            }
+        ])
+        
+    return bubble
+
+
+def make_daily_word_flex(item: DailyWordItem) -> dict:
+    return {
+        "type": "bubble",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#F7A800",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "💡 每日單字 (Daily Word)",
+                    "color": "#ffffff",
+                    "weight": "bold",
+                    "size": "md"
+                }
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "box",
+                    "layout": "horizontal",
+                    "alignItems": "center",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": item.word,
+                            "weight": "bold",
+                            "size": "xl",
+                            "color": "#111111",
+                            "flex": 8
+                        },
+                        {
+                            "type": "button",
+                            "action": {
+                                "type": "message",
+                                "label": "🔊 發音",
+                                "text": f"發音: {item.word}"
+                            },
+                            "style": "secondary",
+                            "height": "sm",
+                            "flex": 3
+                        }
+                    ]
+                },
+                {
+                    "type": "text",
+                    "text": f"中文意思：{item.meaning}",
+                    "margin": "md",
+                    "size": "md",
+                    "weight": "bold",
+                    "color": "#333333"
+                },
+                {
+                    "type": "separator",
+                    "margin": "md"
+                },
+                {
+                    "type": "text",
+                    "text": "📝 實用例句：",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#8c8c8c",
+                    "margin": "md"
+                },
+                {
+                    "type": "text",
+                    "text": item.example,
+                    "wrap": True,
+                    "margin": "xs",
+                    "size": "sm",
+                    "color": "#555555",
+                    "style": "italic"
+                }
+            ]
+        }
+    }
+
+
+def make_pronunciation_flex(result: PronunciationResult) -> dict:
+    return {
+        "type": "bubble",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#17A2B8",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "🔊 單字發音與解析",
+                    "color": "#ffffff",
+                    "weight": "bold",
+                    "size": "md"
+                }
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "box",
+                    "layout": "horizontal",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": result.word,
+                            "weight": "bold",
+                            "size": "xl",
+                            "color": "#111111",
+                            "flex": 7
+                        },
+                        {
+                            "type": "text",
+                            "text": f"[{result.part_of_speech}]",
+                            "color": "#666666",
+                            "size": "sm",
+                            "align": "end",
+                            "gravity": "center",
+                            "flex": 3
+                        }
+                    ]
+                },
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "margin": "md",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": f"🇬🇧 英式 IPA: {result.ipa_uk}",
+                            "size": "xs",
+                            "color": "#555555"
+                        },
+                        {
+                            "type": "text",
+                            "text": f"🇺🇸 美式 IPA: {result.ipa_us}",
+                            "size": "xs",
+                            "color": "#555555",
+                            "margin": "xs"
+                        }
+                    ]
+                },
+                {
+                    "type": "separator",
+                    "margin": "md"
+                },
+                {
+                    "type": "text",
+                    "text": "📖 中文釋義：",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#8c8c8c",
+                    "margin": "md"
+                },
+                {
+                    "type": "text",
+                    "text": result.meaning,
+                    "wrap": True,
+                    "size": "md",
+                    "weight": "bold",
+                    "color": "#333333"
+                },
+                {
+                    "type": "text",
+                    "text": "💡 用法與補充：",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#8c8c8c",
+                    "margin": "md"
+                },
+                {
+                    "type": "text",
+                    "text": result.detail,
+                    "wrap": True,
+                    "size": "sm",
+                    "color": "#555555"
+                }
+            ]
+        }
+    }
+
+
+def make_vocab_added_flex(category: str, word: str, meaning: str) -> dict:
+    return {
+        "type": "bubble",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "box",
+                    "layout": "horizontal",
+                    "alignItems": "center",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "✨ 單字已成功入庫！",
+                            "weight": "bold",
+                            "size": "md",
+                            "color": "#28A745",
+                            "flex": 8
+                        }
+                    ]
+                },
+                {
+                    "type": "separator",
+                    "margin": "md"
+                },
+                {
+                    "type": "box",
+                    "layout": "horizontal",
+                    "margin": "md",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "分類",
+                            "color": "#8c8c8c",
+                            "size": "sm",
+                            "flex": 3
+                        },
+                        {
+                            "type": "text",
+                            "text": category,
+                            "weight": "bold",
+                            "color": "#333333",
+                            "size": "sm",
+                            "flex": 7
+                        }
+                    ]
+                },
+                {
+                    "type": "box",
+                    "layout": "horizontal",
+                    "margin": "sm",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "單字",
+                            "color": "#8c8c8c",
+                            "size": "sm",
+                            "flex": 3
+                        },
+                        {
+                            "type": "text",
+                            "text": word,
+                            "weight": "bold",
+                            "color": "#007BFF",
+                            "size": "sm",
+                            "flex": 7
+                        }
+                    ]
+                },
+                {
+                    "type": "box",
+                    "layout": "horizontal",
+                    "margin": "sm",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "中文意思",
+                            "color": "#8c8c8c",
+                            "size": "sm",
+                            "flex": 3
+                        },
+                        {
+                            "type": "text",
+                            "text": meaning,
+                            "weight": "bold",
+                            "color": "#333333",
+                            "size": "sm",
+                            "flex": 7
+                        }
+                    ]
+                }
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "sm",
+            "contents": [
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "height": "sm",
+                    "color": "#007BFF",
+                    "action": {
+                        "type": "message",
+                        "label": "🔊 發音",
+                        "text": f"發音: {word}"
+                    }
+                },
+                {
+                    "type": "button",
+                    "style": "secondary",
+                    "height": "sm",
+                    "action": {
+                        "type": "message",
+                        "label": "📚 查看單字庫",
+                        "text": "記憶查詢"
+                    }
+                }
+            ]
+        }
+    }
+
+
+def make_vocab_list_flex(rows: list, category: str | None) -> dict:
+    title = f"📚 我的單字庫 ({category})" if category else "📚 我的單字庫 (最近 15 筆)"
+    
+    vocab_contents = []
+    
+    if not rows:
+        return {
+            "type": "bubble",
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": title,
+                        "weight": "bold",
+                        "size": "md",
+                        "color": "#111111"
+                    },
+                    {
+                        "type": "text",
+                        "text": "目前沒有任何詞彙記錄喔！可以輸入以下格式新增：\n記憶新增: 分類|單字|中文意思",
+                        "wrap": True,
+                        "color": "#8c8c8c",
+                        "size": "sm",
+                        "margin": "md"
+                    }
+                ]
+            }
+        }
+        
+    for index, r in enumerate(rows):
+        if index > 0:
+            vocab_contents.append({
+                "type": "separator",
+                "margin": "sm"
+            })
+            
+        vocab_contents.append({
+            "type": "box",
+            "layout": "horizontal",
+            "margin": "sm",
+            "alignItems": "center",
+            "contents": [
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "backgroundColor": "#E8F0FE",
+                    "cornerRadius": "md",
+                    "paddingAll": "2px",
+                    "alignItems": "center",
+                    "justifyContent": "center",
+                    "flex": 3,
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": r.get('category', ''),
+                            "size": "xxs",
+                            "color": "#1A73E8",
+                            "weight": "bold",
+                            "maxLines": 1
+                        }
+                    ]
+                },
+                {
+                    "type": "text",
+                    "text": r.get('word', ''),
+                    "weight": "bold",
+                    "color": "#333333",
+                    "size": "sm",
+                    "margin": "md",
+                    "flex": 4,
+                    "maxLines": 1
+                },
+                {
+                    "type": "text",
+                    "text": r.get('meaning', ''),
+                    "color": "#666666",
+                    "size": "sm",
+                    "flex": 4,
+                    "maxLines": 1
+                },
+                {
+                    "type": "text",
+                    "text": "🔊",
+                    "align": "end",
+                    "size": "sm",
+                    "action": {
+                        "type": "message",
+                        "text": f"發音: {r.get('word', '')}"
+                    },
+                    "flex": 1
+                }
+            ]
+        })
+        
+    return {
+        "type": "bubble",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#1A73E8",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": title,
+                    "color": "#ffffff",
+                    "weight": "bold",
+                    "size": "md"
+                }
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "sm",
+            "contents": vocab_contents
+        }
+    }
+
+
+def make_image_analysis_flex(result: ImageAnalysisResult, saved_count: int) -> dict:
+    vocab_contents = []
+    for item in result.vocab_list:
+        vocab_contents.append({
+            "type": "box",
+            "layout": "horizontal",
+            "margin": "sm",
+            "alignItems": "center",
+            "contents": [
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "backgroundColor": "#E1F5FE",
+                    "cornerRadius": "md",
+                    "paddingAll": "2px",
+                    "alignItems": "center",
+                    "flex": 3,
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": item.category,
+                            "size": "xxs",
+                            "color": "#0288D1",
+                            "weight": "bold"
+                        }
+                    ]
+                },
+                {
+                    "type": "text",
+                    "text": item.word,
+                    "weight": "bold",
+                    "color": "#333333",
+                    "size": "sm",
+                    "margin": "md",
+                    "flex": 4
+                },
+                {
+                    "type": "text",
+                    "text": item.meaning,
+                    "color": "#666666",
+                    "size": "sm",
+                    "flex": 4
+                },
+                {
+                    "type": "text",
+                    "text": "🔊",
+                    "align": "end",
+                    "size": "sm",
+                    "action": {
+                        "type": "message",
+                        "text": f"發音: {item.word}"
+                    },
+                    "flex": 1
+                }
+            ]
+        })
+
+    bubble = {
+        "type": "bubble",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#6A1B9A",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "📷 智慧圖片分析",
+                    "color": "#ffffff",
+                    "weight": "bold",
+                    "size": "md"
+                }
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "📝 圖片內容描述：",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#8c8c8c"
+                },
+                {
+                    "type": "text",
+                    "text": result.description,
+                    "wrap": True,
+                    "margin": "xs",
+                    "size": "sm",
+                    "color": "#333333"
+                },
+                {
+                    "type": "separator",
+                    "margin": "md"
+                },
+                {
+                    "type": "text",
+                    "text": "💡 英語學習重點：",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#8c8c8c",
+                    "margin": "md"
+                },
+                {
+                    "type": "text",
+                    "text": result.learning_points,
+                    "wrap": True,
+                    "margin": "xs",
+                    "size": "sm",
+                    "color": "#333333"
+                },
+                {
+                    "type": "separator",
+                    "margin": "md"
+                },
+                {
+                    "type": "text",
+                    "text": "📚 相關學習單字：",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#8c8c8c",
+                    "margin": "md"
+                },
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "margin": "xs",
+                    "contents": vocab_contents
+                }
+            ]
+        }
+    }
+    
+    if saved_count > 0:
+        bubble["body"]["contents"].extend([
+            {
+                "type": "separator",
+                "margin": "md"
+            },
+            {
+                "type": "text",
+                "text": f"✨ 已自動將這 {saved_count} 個單字存入您的單字庫中！",
+                "weight": "bold",
+                "size": "xs",
+                "color": "#28A745",
+                "margin": "md",
+                "align": "center"
+            }
+        ])
+        
+    return bubble
 
 
 # === Helper Functions ===
@@ -178,12 +876,24 @@ def ask_gemini_multiturn(user_id: str, prompt: str) -> str:
     return model_reply
 
 
-def translate_article(text: str) -> str:
-    prompt = (
-        "請將以下文章翻譯成繁體中文，保留段落。最後補上3個關鍵詞彙解釋。\n\n"
-        f"{text}"
-    )
-    return ask_gemini(prompt)
+def translate_article(text: str) -> TranslationResult | None:
+    if not gemini_client:
+        return None
+    prompt = f"請將以下文章翻譯成繁體中文，並挑選出 3-5 個關鍵詞彙進行解釋。\n\n文章內容：\n{text}"
+    try:
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=TranslationResult,
+                system_instruction="你是一個專業的翻譯與語言學習專家。請一律使用繁體中文（台灣語境）回覆翻譯結果與解釋。"
+            )
+        )
+        return response.parsed
+    except Exception as e:
+        app.logger.error(f"translate_article error: {e}")
+        return None
 
 
 def conversation_coach(text: str) -> str:
@@ -217,11 +927,26 @@ def get_pronunciation_audio(word: str) -> str | None:
     return None
 
 
-def word_pronunciation(word: str) -> tuple[str, str | None]:
-    prompt = f"請提供單字 {word} 的IPA（英式與美式）、詞性與簡短中文解釋。"
-    text_reply = ask_gemini(prompt)
-    audio_url = get_pronunciation_audio(word)
-    return text_reply, audio_url
+def word_pronunciation(word: str) -> tuple[PronunciationResult | None, str | None]:
+    if not gemini_client:
+        return None, None
+    prompt = f"請提供單字 {word} 的IPA（英式與美式）、詞性、簡短中文解釋與補充用法。"
+    try:
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=PronunciationResult,
+                system_instruction="你是一個英文老師，請一律使用繁體中文（台灣語境）回答。"
+            ),
+        )
+        result: PronunciationResult = response.parsed
+        audio_url = get_pronunciation_audio(word)
+        return result, audio_url
+    except Exception as e:
+        app.logger.error(f"Failed to generate pronunciation: {e}")
+        return None, None
 
 
 def add_vocab(user_id: str, category: str, word: str, meaning: str) -> str:
@@ -258,7 +983,21 @@ def list_vocab(user_id: str, category: str | None) -> str:
         return "無法載入詞彙記憶，請稍後再試。"
 
 
-def daily_word() -> str:
+def get_vocab_list(user_id: str, category: str | None) -> list:
+    if not supabase:
+        return []
+    try:
+        query = supabase.table("vocab_memory").select("category,word,meaning").eq("user_id", user_id)
+        if category:
+            query = query.eq("category", category)
+        rows = query.order("id", desc=True).limit(15).execute().data or []
+        return rows
+    except Exception as e:
+        app.logger.error(f"get_vocab_list failed: {e}")
+        return []
+
+
+def daily_word() -> DailyWordItem | None:
     if supabase:
         try:
             rows = (
@@ -270,12 +1009,16 @@ def daily_word() -> str:
             )
             if rows:
                 row = random.choice(rows)
-                return f"💡 每日單字：{row['word']}\n📖 意思：{row['meaning']}\n📝 例句：{row['example']}"
+                return DailyWordItem(word=row['word'], meaning=row['meaning'], example=row['example'])
         except Exception as e:
             app.logger.error(f"Failed to fetch daily word from Supabase: {e}")
 
     if not gemini_client:
-        return "💡 每日單字：apple\n📖 意思：蘋果\n📝 例句：An apple a day keeps the doctor away."
+        return DailyWordItem(
+            word="apple",
+            meaning="蘋果",
+            example="An apple a day keeps the doctor away. (一天一蘋果，醫生遠離我。)"
+        )
 
     try:
         response = gemini_client.models.generate_content(
@@ -298,10 +1041,14 @@ def daily_word() -> str:
                 }).execute()
             except Exception as e:
                 app.logger.error(f"Failed to auto-insert daily word: {e}")
-        return f"💡 每日單字：{item.word}\n📖 意思：{item.meaning}\n📝 例句：{item.example}"
+        return item
     except Exception as e:
         app.logger.error(f"Failed to generate daily word: {e}")
-        return "💡 每日單字：apple\n📖 意思：蘋果\n📝 例句：An apple a day keeps the doctor away. (一天一蘋果，醫生遠離我。)"
+        return DailyWordItem(
+            word="apple",
+            meaning="蘋果",
+            example="An apple a day keeps the doctor away. (一天一蘋果，醫生遠離我。)"
+        )
 
 
 def generate_image(prompt: str) -> str | None:
@@ -413,19 +1160,40 @@ def handle_text_message(event):
     user_input = event.message.text.strip()
 
     if user_input.startswith("翻譯:"):
-        reply_text(event.reply_token, translate_article(user_input.replace("翻譯:", "", 1).strip()))
+        article = user_input.replace("翻譯:", "", 1).strip()
+        result = translate_article(article)
+        if result:
+            flex_content = make_translation_flex(result)
+            with ApiClient(configuration) as api_client:
+                line_api = MessagingApi(api_client)
+                line_api.reply_message(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[FlexMessage(alt_text="翻譯與單字解析", contents=flex_content)],
+                    )
+                )
+        else:
+            reply_text(event.reply_token, "翻譯失敗，請稍後再試。")
         return
+
     if user_input.startswith("會話:"):
         # 會話練習也走多輪，但去除指令前綴
         practice_sentence = user_input.replace("會話:", "", 1).strip()
         output = ask_gemini_multiturn(user_id, practice_sentence)
         reply_text(event.reply_token, output)
         return
+
     if user_input.startswith("發音:"):
         word = user_input.replace("發音:", "", 1).strip()
-        text_reply, audio_url = word_pronunciation(word)
+        result, audio_url = word_pronunciation(word)
         
-        messages = [TextMessage(text=text_reply[:5000])]
+        messages = []
+        if result:
+            flex_content = make_pronunciation_flex(result)
+            messages.append(FlexMessage(alt_text=f"發音與解析: {word}", contents=flex_content))
+        else:
+            messages.append(TextMessage(text=f"無法查詢單字 {word}，但已為您產出發音語音。"))
+            
         if audio_url:
             messages.append(
                 AudioMessage(
@@ -443,23 +1211,68 @@ def handle_text_message(event):
                 )
             )
         return
+
     if user_input.startswith("記憶新增:"):
         raw = user_input.replace("記憶新增:", "", 1).strip()
         parts = [x.strip() for x in raw.split("|")]
         if len(parts) != 3:
             reply_text(event.reply_token, "格式: 記憶新增: 分類|單字|中文意思")
             return
-        reply_text(event.reply_token, add_vocab(user_id, parts[0], parts[1], parts[2]))
+        
+        category, word, meaning = parts[0], parts[1], parts[2]
+        res_text = add_vocab(user_id, category, word, meaning)
+        
+        if "已新增單字" in res_text:
+            flex_content = make_vocab_added_flex(category, word, meaning)
+            with ApiClient(configuration) as api_client:
+                line_api = MessagingApi(api_client)
+                line_api.reply_message(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[FlexMessage(alt_text="單字已成功入庫", contents=flex_content)],
+                    )
+                )
+        else:
+            reply_text(event.reply_token, res_text)
         return
+
     if user_input.startswith("記憶查詢"):
         category = None
         if ":" in user_input:
             category = user_input.split(":", 1)[1].strip() or None
-        reply_text(event.reply_token, list_vocab(user_id, category))
+            
+        if not supabase:
+            reply_text(event.reply_token, "尚未設定 Supabase，請先設定 SUPABASE_URL / SUPABASE_KEY。")
+            return
+            
+        rows = get_vocab_list(user_id, category)
+        flex_content = make_vocab_list_flex(rows, category)
+        with ApiClient(configuration) as api_client:
+            line_api = MessagingApi(api_client)
+            line_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[FlexMessage(alt_text="我的單字庫", contents=flex_content)],
+                )
+            )
         return
+
     if user_input == "每日單字":
-        reply_text(event.reply_token, daily_word())
+        item = daily_word()
+        if item:
+            flex_content = make_daily_word_flex(item)
+            with ApiClient(configuration) as api_client:
+                line_api = MessagingApi(api_client)
+                line_api.reply_message(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[FlexMessage(alt_text="每日單字", contents=flex_content)],
+                    )
+                )
+        else:
+            reply_text(event.reply_token, "無法獲取每日單字，請稍後再試。")
         return
+
     if user_input.startswith("生圖:"):
         image_url = generate_image(user_input.replace("生圖:", "", 1).strip())
         if not image_url:
@@ -529,16 +1342,15 @@ def handle_image_message(event):
                     app.logger.error(f"Failed to auto-save image vocab: {e}")
 
         # 組合回覆
-        vocab_str = "\n".join([f"- [{item.category}] {item.word}：{item.meaning}" for item in result.vocab_list])
-        reply_msg = (
-            f"📷 圖片描述：\n{result.description}\n\n"
-            f"💡 學習重點：\n{result.learning_points}\n\n"
-            f"📚 學習單字：\n{vocab_str}"
-        )
-        if saved_count > 0:
-            reply_msg += f"\n\n✨ 已自動將這 {saved_count} 個單字存入您的單字庫中！"
-
-        reply_text(event.reply_token, reply_msg)
+        flex_content = make_image_analysis_flex(result, saved_count)
+        with ApiClient(configuration) as api_client:
+            line_api = MessagingApi(api_client)
+            line_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[FlexMessage(alt_text="圖片分析與學習結果", contents=flex_content)],
+                )
+            )
     except Exception as e:
         app.logger.error(f"Image analysis failed: {e}")
         reply_text(event.reply_token, "圖片理解失敗，請稍後再試。")
