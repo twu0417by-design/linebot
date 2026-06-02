@@ -121,36 +121,29 @@ def make_translation_flex(result: TranslationResult) -> dict:
     for v in result.vocabularies:
         vocab_contents.append({
             "type": "box",
-            "layout": "horizontal",
+            "layout": "vertical",
             "margin": "md",
-            "alignItems": "center",
             "contents": [
                 {
-                    "type": "text",
-                    "text": v.word,
-                    "weight": "bold",
-                    "color": "#1DB446",
-                    "size": "sm",
-                    "flex": 4
+                    "type": "box",
+                    "layout": "horizontal",
+                    "alignItems": "center",
+                    "contents": [
+                        {"type": "text", "text": v.word, "weight": "bold", "color": "#1DB446", "size": "sm", "flex": 4},
+                        {"type": "text", "text": v.meaning, "color": "#666666", "size": "sm", "flex": 6},
+                        {"type": "text", "text": "🔊", "align": "end", "size": "sm", "action": {"type": "message", "label": "發音", "text": f"發音: {v.word}"}, "flex": 1}
+                    ]
                 },
                 {
-                    "type": "text",
-                    "text": v.meaning,
-                    "color": "#666666",
-                    "size": "sm",
-                    "flex": 6
-                },
-                {
-                    "type": "text",
-                    "text": "🔊",
-                    "align": "end",
-                    "size": "sm",
+                    "type": "button",
+                    "style": "secondary",
+                    "margin": "xs",
+                    "height": "sm",
                     "action": {
                         "type": "message",
-                        "label": "發音",
-                        "text": f"發音: {v.word}"
-                    },
-                    "flex": 1
+                        "label": "💾 加入單字庫",
+                        "text": f"記憶新增快捷: 翻譯收藏|{v.word}|{v.meaning}"
+                    }
                 }
             ]
         })
@@ -1314,7 +1307,33 @@ def handle_text_message(event):
     user_id = getattr(event.source, "user_id", "anonymous")
     user_input = event.message.text.strip()
 
-    # 0. 優先攔截「發音: 」前綴的快捷指令
+    # 0a. 優先攔截「記憶新增快捷:」前綴（翻譯卡片上的加入單字庫按鈕）
+    if user_input.startswith("記憶新增快捷:") or user_input.startswith("記憶新增快捷："):
+        payload = user_input.split(":", 1)[1].strip()
+        parts = [x.strip() for x in payload.split("|")]
+        if len(parts) == 3:
+            category, word, meaning = parts[0], parts[1], parts[2]
+            res_text = add_vocab(user_id, category, word, meaning)
+            if "已新增單字" in res_text:
+                flex_content = make_vocab_added_flex(category, word, meaning)
+                with ApiClient(configuration) as api_client:
+                    line_api = MessagingApi(api_client)
+                    line_api.reply_message(
+                        ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[FlexMessage(
+                                alt_text=f"✅ {word} 已加入單字庫",
+                                contents=FlexContainer.from_json(json.dumps(flex_content))
+                            )],
+                        )
+                    )
+            else:
+                reply_text(event.reply_token, res_text)
+        else:
+            reply_text(event.reply_token, "快速加入格式錯誤，請重新嘗試。")
+        return
+
+    # 0b. 優先攔截「發音: 」前綴的快捷指令
     if user_input.startswith("發音:") or user_input.startswith("發音："):
         word = user_input[3:].strip()
         audio_url = get_pronunciation_audio(word)
