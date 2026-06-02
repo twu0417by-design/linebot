@@ -121,29 +121,36 @@ def make_translation_flex(result: TranslationResult) -> dict:
     for v in result.vocabularies:
         vocab_contents.append({
             "type": "box",
-            "layout": "vertical",
+            "layout": "horizontal",
             "margin": "md",
+            "alignItems": "center",
             "contents": [
                 {
-                    "type": "box",
-                    "layout": "horizontal",
-                    "alignItems": "center",
-                    "contents": [
-                        {"type": "text", "text": v.word, "weight": "bold", "color": "#1DB446", "size": "sm", "flex": 4},
-                        {"type": "text", "text": v.meaning, "color": "#666666", "size": "sm", "flex": 6},
-                        {"type": "text", "text": "🔊", "align": "end", "size": "sm", "action": {"type": "message", "label": "發音", "text": f"發音: {v.word}"}, "flex": 1}
-                    ]
+                    "type": "text",
+                    "text": v.word,
+                    "weight": "bold",
+                    "color": "#1DB446",
+                    "size": "sm",
+                    "flex": 4
                 },
                 {
-                    "type": "button",
-                    "style": "secondary",
-                    "margin": "xs",
-                    "height": "sm",
+                    "type": "text",
+                    "text": v.meaning,
+                    "color": "#666666",
+                    "size": "sm",
+                    "flex": 6
+                },
+                {
+                    "type": "text",
+                    "text": "🔊",
+                    "align": "end",
+                    "size": "sm",
                     "action": {
                         "type": "message",
-                        "label": "💾 加入單字庫",
-                        "text": f"記憶新增快捷: 翻譯收藏|{v.word}|{v.meaning}"
-                    }
+                        "label": "發音",
+                        "text": f"發音: {v.word}"
+                    },
+                    "flex": 1
                 }
             ]
         })
@@ -390,6 +397,22 @@ def make_pronunciation_flex(result: PronunciationResult) -> dict:
                     "wrap": True,
                     "size": "sm",
                     "color": "#555555"
+                }
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "color": "#1DB446",
+                    "action": {
+                        "type": "message",
+                        "label": "💾 加入單字庫",
+                        "text": f"記憶新增快捷: 發音收藏|{result.word}|{result.meaning}"
+                    }
                 }
             ]
         }
