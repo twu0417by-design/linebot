@@ -1,0 +1,13 @@
+SUPABASE_URL=""
+# Anon Key / Publishable Key (公開/匿名金鑰)
+SUPABASE_KEY=""
+# Service Role Key / Secret Key (管理員/服務金鑰，請妥善保管)
+SUPABASE_SERVICE_ROLE_KEY=""
+# Supabase 個人存取權杖 (Personal Access Token)
+SUPABASE_ACCESS_TOKEN=""
+
+# LINE Bot 與 Gemini 設定預留位置 (請依您的需求填入)
+LINE_CHANNEL_SECRET=""
+LINE_CHANNEL_ACCESS_TOKEN=""
+GEMINI_API_KEY=""
+SPACE_HOST=""
