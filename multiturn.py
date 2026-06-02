@@ -1056,28 +1056,6 @@ def daily_word() -> DailyWordItem | None:
         )
 
 
-def generate_image(prompt: str) -> str | None:
-    if not gemini_client:
-        return None
-    try:
-        # 使用 Imagen 3 模型生成圖像
-        response = gemini_client.models.generate_images(
-            model="imagen-3.0-generate-002",
-            prompt=prompt,
-            config=types.GenerateImagesConfig(
-                number_of_images=1
-            )
-        )
-        if response.generated_images:
-            image_data = response.generated_images[0].image.image_bytes
-            image = Image.open(BytesIO(image_data))
-            filename = f"gen_{uuid.uuid4().hex}.png"
-            image.save(os.path.join(static_tmp_path, filename))
-            return f"https://{SPACE_HOST}/images/{filename}" if SPACE_HOST else None
-    except Exception as e:
-        app.logger.error(f"Image generation failed: {e}")
-    return None
-
 
 # === Flask Routing ===
 
@@ -1157,56 +1135,135 @@ def callback():
     return "OK"
 
 
-# === LINE Message Handlers ===
+# === User Mode Management ===
+user_modes_memory = {}
 
-@handler.add(MessageEvent, message=TextMessageContent)
-def handle_text_message(event):
-    user_id = getattr(event.source, "user_id", "anonymous")
-    user_input = event.message.text.strip()
+def get_user_mode(user_id: str) -> str:
+    if supabase:
+        try:
+            res = supabase.table("user_states").select("mode").eq("user_id", user_id).execute()
+            if res.data:
+                return res.data[0]["mode"]
+        except Exception as e:
+            app.logger.warning(f"Failed to get user mode from Supabase: {e}. Fallback to memory.")
+    return user_modes_memory.get(user_id, "general")
 
-    if user_input.startswith("翻譯:"):
-        article = user_input.replace("翻譯:", "", 1).strip()
-        result = translate_article(article)
-        if result:
-            flex_content = make_translation_flex(result)
-            with ApiClient(configuration) as api_client:
-                line_api = MessagingApi(api_client)
-                line_api.reply_message(
-                    ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[FlexMessage(alt_text="翻譯與單字解析", contents=FlexContainer.from_json(json.dumps(flex_content)))],
-                    )
-                )
-        else:
-            reply_text(event.reply_token, "翻譯失敗，請稍後再試。")
-        return
+def set_user_mode(user_id: str, mode: str):
+    user_modes_memory[user_id] = mode
+    if supabase:
+        try:
+            supabase.table("user_states").upsert({"user_id": user_id, "mode": mode}).execute()
+        except Exception as e:
+            app.logger.warning(f"Failed to set user mode in Supabase: {e}. Saved in memory.")
 
-    if user_input.startswith("會話:"):
-        # 會話練習也走多輪，但去除指令前綴
-        practice_sentence = user_input.replace("會話:", "", 1).strip()
-        output = ask_gemini_multiturn(user_id, practice_sentence)
-        reply_text(event.reply_token, output)
-        return
+# === Sub-handlers for each feature ===
 
-    if user_input.startswith("發音:"):
-        word = user_input.replace("發音:", "", 1).strip()
-        result, audio_url = word_pronunciation(word)
-        
-        messages = []
-        if result:
-            flex_content = make_pronunciation_flex(result)
-            messages.append(FlexMessage(alt_text=f"發音與解析: {word}", contents=FlexContainer.from_json(json.dumps(flex_content))))
-        else:
-            messages.append(TextMessage(text=f"無法查詢單字 {word}，但已為您產出發音語音。"))
-            
-        if audio_url:
-            messages.append(
-                AudioMessage(
-                    original_content_url=audio_url,
-                    duration=2000
+def do_translation(event, article: str):
+    result = translate_article(article)
+    if result:
+        flex_content = make_translation_flex(result)
+        with ApiClient(configuration) as api_client:
+            line_api = MessagingApi(api_client)
+            line_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[FlexMessage(alt_text="翻譯與單字解析", contents=FlexContainer.from_json(json.dumps(flex_content)))],
                 )
             )
+    else:
+        reply_text(event.reply_token, "翻譯失敗，請稍後再試。")
+
+def do_conversation(event, user_id: str, practice_sentence: str):
+    output = ask_gemini_multiturn(user_id, practice_sentence)
+    reply_text(event.reply_token, output)
+
+def do_pronunciation(event, word: str):
+    result, audio_url = word_pronunciation(word)
+    messages = []
+    if result:
+        flex_content = make_pronunciation_flex(result)
+        messages.append(FlexMessage(alt_text=f"發音與解析: {word}", contents=FlexContainer.from_json(json.dumps(flex_content))))
+    else:
+        messages.append(TextMessage(text=f"無法查詢單字 {word}，但已為您產出發音語音。"))
         
+    if audio_url:
+        messages.append(
+            AudioMessage(
+                original_content_url=audio_url,
+                duration=2000
+            )
+        )
+    
+    with ApiClient(configuration) as api_client:
+        line_api = MessagingApi(api_client)
+        line_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=messages,
+            )
+        )
+
+def do_vocab_add(event, user_id: str, raw_input: str):
+    parts = [x.strip() for x in raw_input.split("|")]
+    if len(parts) != 3:
+        reply_text(event.reply_token, "格式錯誤！請依照格式輸入：\n分類|單字|中文意思\n例如：食物|apple|蘋果")
+        return
+    
+    category, word, meaning = parts[0], parts[1], parts[2]
+    res_text = add_vocab(user_id, category, word, meaning)
+    
+    if "已新增單字" in res_text:
+        flex_content = make_vocab_added_flex(category, word, meaning)
+        with ApiClient(configuration) as api_client:
+            line_api = MessagingApi(api_client)
+            line_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[FlexMessage(alt_text="單字已成功入庫", contents=FlexContainer.from_json(json.dumps(flex_content)))],
+                )
+            )
+    else:
+        reply_text(event.reply_token, res_text)
+
+def do_vocab_query(event, user_id: str, category: str = None, send_prompt: bool = False):
+    if not supabase:
+        reply_text(event.reply_token, "尚未設定 Supabase，請先設定 SUPABASE_URL / SUPABASE_KEY。")
+        return
+        
+    rows = get_vocab_list(user_id, category)
+    flex_content = make_vocab_list_flex(rows, category)
+    
+    messages = [FlexMessage(alt_text="我的單字庫", contents=FlexContainer.from_json(json.dumps(flex_content)))]
+    if send_prompt:
+        prompt_text = (
+            "已切換至【記憶查詢】模式 🔍\n"
+            "請輸入您想查詢的單字分類（例如：食物、動物），或輸入『全部』列出所有單字。\n\n"
+            "💡 若要回到一般聊天，請輸入「退出」或「一般聊天」。"
+        )
+        messages.append(TextMessage(text=prompt_text))
+        
+    with ApiClient(configuration) as api_client:
+        line_api = MessagingApi(api_client)
+        line_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=messages,
+            )
+        )
+
+def do_daily_word(event, send_prompt: bool = False):
+    item = daily_word()
+    if item:
+        flex_content = make_daily_word_flex(item)
+        messages = [FlexMessage(alt_text="每日單字", contents=FlexContainer.from_json(json.dumps(flex_content)))]
+        if send_prompt:
+            prompt_text = (
+                "已切換至【每日單字】模式 📅\n"
+                "點擊或輸入任何字，將為您推薦下一個每日單字。\n\n"
+                "💡 若要回到一般聊天，請輸入「退出」或「一般聊天」。"
+            )
+            messages.append(TextMessage(text=prompt_text))
+            
         with ApiClient(configuration) as api_client:
             line_api = MessagingApi(api_client)
             line_api.reply_message(
@@ -1215,92 +1272,99 @@ def handle_text_message(event):
                     messages=messages,
                 )
             )
-        return
+    else:
+        reply_text(event.reply_token, "無法獲取每日單字，請稍後再試。")
 
-    if user_input.startswith("記憶新增:"):
-        raw = user_input.replace("記憶新增:", "", 1).strip()
-        parts = [x.strip() for x in raw.split("|")]
-        if len(parts) != 3:
-            reply_text(event.reply_token, "格式: 記憶新增: 分類|單字|中文意思")
-            return
-        
-        category, word, meaning = parts[0], parts[1], parts[2]
-        res_text = add_vocab(user_id, category, word, meaning)
-        
-        if "已新增單字" in res_text:
-            flex_content = make_vocab_added_flex(category, word, meaning)
-            with ApiClient(configuration) as api_client:
-                line_api = MessagingApi(api_client)
-                line_api.reply_message(
-                    ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[FlexMessage(alt_text="單字已成功入庫", contents=FlexContainer.from_json(json.dumps(flex_content)))],
-                    )
-                )
-        else:
-            reply_text(event.reply_token, res_text)
-        return
+# === LINE Message Handlers ===
 
-    if user_input.startswith("記憶查詢"):
-        category = None
-        if ":" in user_input:
-            category = user_input.split(":", 1)[1].strip() or None
-            
-        if not supabase:
-            reply_text(event.reply_token, "尚未設定 Supabase，請先設定 SUPABASE_URL / SUPABASE_KEY。")
-            return
-            
-        rows = get_vocab_list(user_id, category)
-        flex_content = make_vocab_list_flex(rows, category)
-        with ApiClient(configuration) as api_client:
-            line_api = MessagingApi(api_client)
-            line_api.reply_message(
-                ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[FlexMessage(alt_text="我的單字庫", contents=FlexContainer.from_json(json.dumps(flex_content)))],
-                )
+MODE_MAPPING = {
+    "翻譯": "translation",
+    "記憶新增": "vocab_add",
+    "記憶查詢": "vocab_query",
+    "每日單字": "daily_word",
+    "會話": "conversation",
+    "發音": "pronunciation",
+    "退出": "general",
+    "一般聊天": "general",
+    "一般": "general",
+    "結束": "general",
+}
+
+@handler.add(MessageEvent, message=TextMessageContent)
+def handle_text_message(event):
+    user_id = getattr(event.source, "user_id", "anonymous")
+    user_input = event.message.text.strip()
+
+    # 1. 檢查是否為功能切換關鍵字
+    if user_input in MODE_MAPPING:
+        target_mode = MODE_MAPPING[user_input]
+        set_user_mode(user_id, target_mode)
+        
+        if target_mode == "translation":
+            reply_text(
+                event.reply_token,
+                "已切換至【翻譯】模式 📝\n"
+                "請直接輸入要翻譯的文字或文章，我會為您翻譯並解析關鍵單字！\n\n"
+                "💡 若要回到一般聊天，請輸入「退出」或「一般聊天」。"
+            )
+        elif target_mode == "vocab_add":
+            reply_text(
+                event.reply_token,
+                "已切換至【記憶新增】模式 💾\n"
+                "請輸入您想新增的單字，格式如下：\n"
+                "分類|單字|中文意思\n"
+                "例如：`食物|apple|蘋果`\n\n"
+                "💡 若要回到一般聊天，請輸入「退出」或「一般聊天」。"
+            )
+        elif target_mode == "vocab_query":
+            # 切換時，直接幫他查詢全部，並附上提示文字
+            do_vocab_query(event, user_id, category=None, send_prompt=True)
+        elif target_mode == "daily_word":
+            # 切換時，直接幫他出一個每日單字，並附上提示文字
+            do_daily_word(event, send_prompt=True)
+        elif target_mode == "conversation":
+            reply_text(
+                event.reply_token,
+                "已切換至【會話】模式 🗣️\n"
+                "請輸入您想練習或聊天的內容，我會以英文跟您進行會話練習！\n\n"
+                "💡 若要回到一般聊天，請輸入「退出」或「一般聊天」。"
+            )
+        elif target_mode == "pronunciation":
+            reply_text(
+                event.reply_token,
+                "已切換至【發音】模式 🔊\n"
+                "請直接輸入欲查詢發音的英文單字，我會為您查詢發音與發音語音檔！\n\n"
+                "💡 若要回到一般聊天，請輸入「退出」或「一般聊天」。"
+            )
+        else: # general
+            reply_text(
+                event.reply_token,
+                "已回到【一般聊天】模式 💬\n"
+                "現在您可以與我隨意對話，或隨時點選選單切換至其他功能。"
             )
         return
 
-    if user_input == "每日單字":
-        item = daily_word()
-        if item:
-            flex_content = make_daily_word_flex(item)
-            with ApiClient(configuration) as api_client:
-                line_api = MessagingApi(api_client)
-                line_api.reply_message(
-                    ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[FlexMessage(alt_text="每日單字", contents=FlexContainer.from_json(json.dumps(flex_content)))],
-                    )
-                )
-        else:
-            reply_text(event.reply_token, "無法獲取每日單字，請稍後再試。")
-        return
+    # 2. 若非切換關鍵字，根據當前模式執行
+    current_mode = get_user_mode(user_id)
+    
+    if current_mode == "translation":
+        do_translation(event, user_input)
+    elif current_mode == "vocab_add":
+        do_vocab_add(event, user_id, user_input)
+    elif current_mode == "vocab_query":
+        category = None if user_input in ["全部", "all", "全部單字"] else user_input
+        do_vocab_query(event, user_id, category=category)
+    elif current_mode == "daily_word":
+        do_daily_word(event)
+    elif current_mode == "conversation":
+        do_conversation(event, user_id, user_input)
+    elif current_mode == "pronunciation":
+        do_pronunciation(event, user_input)
+    else: # general / None
+        # 一般聊天直接使用多輪會話功能
+        output = ask_gemini_multiturn(user_id, user_input)
+        reply_text(event.reply_token, output)
 
-    if user_input.startswith("生圖:"):
-        image_url = generate_image(user_input.replace("生圖:", "", 1).strip())
-        if not image_url:
-            reply_text(event.reply_token, "生圖失敗，請確認 SPACE_HOST 與 Gemini 權限設定。")
-            return
-        with ApiClient(configuration) as api_client:
-            line_api = MessagingApi(api_client)
-            line_api.reply_message(
-                ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[
-                        ImageMessage(
-                            original_content_url=image_url,
-                            preview_image_url=image_url,
-                        )
-                    ],
-                )
-            )
-        return
-
-    # 一般聊天直接使用多輪會話功能
-    output = ask_gemini_multiturn(user_id, user_input)
-    reply_text(event.reply_token, output)
 
 
 @handler.add(MessageEvent, message=ImageMessageContent)
@@ -1359,3 +1423,14 @@ def handle_image_message(event):
     except Exception as e:
         app.logger.error(f"Image analysis failed: {e}")
         reply_text(event.reply_token, "圖片理解失敗，請稍後再試。")
+
+
+# === 自動初始化 Rich Menu ===
+try:
+    from init_rich_menu import init_rich_menu
+    # 僅在載入此模組時嘗試初始化一次，避免每次 Webhook 呼叫都執行。
+    # 這會在應用啟動時被執行。
+    init_rich_menu()
+except Exception as e:
+    app.logger.warning(f"Auto-initializing rich menu failed: {e}")
+
