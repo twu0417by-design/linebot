@@ -93,32 +93,32 @@ def init_rich_menu():
                 print(f"回應內容: {res.text}")
             return False
             
-        # 3. 上傳 Rich Menu 圖片
-        img_path = "rich_menu.png"
-        if not os.path.exists(img_path):
-            print(f"❌ 錯誤：找不到 {img_path} 圖片。請確認圖片是否存在。")
-            return False
-            
-        print("正在上傳 Rich Menu 圖片...")
-        try:
-            with open(img_path, "rb") as f:
-                img_data = f.read()
-            upload_headers = {
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "image/png"
-            }
-            res = requests.post(
-                f"https://api-data.line.me/v2/bot/richmenu/{target_menu_id}/content",
-                headers=upload_headers,
-                data=img_data
-            )
-            res.raise_for_status()
-            print("圖片上傳成功！")
-        except Exception as e:
-            print(f"❌ 上傳 Rich Menu 圖片失敗：{e}")
-            if 'res' in locals():
-                print(f"回應內容: {res.text}")
-            return False
+    # 3. 上傳 Rich Menu 圖片
+    img_path = "rich_menu.jpg"
+    if not os.path.exists(img_path):
+        print(f"❌ 錯誤：找不到 {img_path} 圖片。請確認圖片是否存在。")
+        return False
+        
+    print("正在上傳 Rich Menu 圖片...")
+    try:
+        with open(img_path, "rb") as f:
+            img_data = f.read()
+        upload_headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "image/jpeg"
+        }
+        res = requests.post(
+            f"https://api-data.line.me/v2/bot/richmenu/{target_menu_id}/content",
+            headers=upload_headers,
+            data=img_data
+        )
+        res.raise_for_status()
+        print("圖片上傳成功！")
+    except Exception as e:
+        print(f"❌ 上傳 Rich Menu 圖片失敗：{e}")
+        if 'res' in locals():
+            print(f"回應內容: {res.text}")
+        return False
             
     # 4. 設定為預設 Rich Menu
     print("正在將 Rich Menu 設定為預設...")
