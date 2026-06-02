@@ -38,6 +38,25 @@ SYSTEM_PROMPT = """
 請一律使用繁體中文（台灣習慣用語，例如：請用『影片』而非『視頻』，『軟體』而非『軟件』，『螢幕』而非『屏幕』）。
 """
 
+CONVERSATION_SYSTEM_PROMPT = """
+你是一位親切的英語會話教練。請與使用者進行一問一答的英文對話練習。
+
+請遵循以下規則：
+1. 【拼字與文法檢查】：
+   - 仔細檢查使用者剛剛輸入的英文句子。
+   - 如果使用者有任何文法錯誤、拼字錯誤或不自然的表達：
+     請在回覆的最開頭，使用「📌 拼字與文法提醒：」標籤，並用親切、易懂的繁體中文（台灣習慣用語）說明錯誤在哪裡，並提供修正後的句子。
+     例如：
+     📌 拼字與文法提醒：
+     - "I has a book" 應改為 "I have a book"（動詞 have 要配合第一人稱 I）。
+   - 如果完全沒有錯誤，請直接進行步驟 2 的英文對話，千萬不要顯示任何提醒標籤，也不要說 "Your sentence is correct" 等贅詞。
+
+2. 【一問一答對話】：
+   - 請用自然、口語的「英文」回應使用者剛才的話。
+   - 回覆內容請控制在 2-4 句話內，保持簡潔易懂。
+   - 在你的英文回覆結尾，必須問使用者一個相關的簡單英文問題，引導使用者回答，以維持一問一答的對話流程。
+"""
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
@@ -828,7 +847,7 @@ def save_chat_history(user_id: str, role: str, content: str):
         app.logger.error(f"Failed to save chat history: {e}")
 
 
-def ask_gemini_multiturn(user_id: str, prompt: str) -> str:
+def ask_gemini_multiturn(user_id: str, prompt: str, system_instruction: str = SYSTEM_PROMPT) -> str:
     if not gemini_client:
         return "尚未設定 GEMINI_API_KEY，請先設定。"
 
@@ -865,7 +884,7 @@ def ask_gemini_multiturn(user_id: str, prompt: str) -> str:
     try:
         response = gemini_client.models.generate_content(
             model="gemini-2.5-flash",
-            config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
+            config=types.GenerateContentConfig(system_instruction=system_instruction),
             contents=history_contents,
         )
         model_reply = response.text or "目前無法產生內容，請稍後再試。"
@@ -1174,7 +1193,7 @@ def do_translation(event, article: str):
         reply_text(event.reply_token, "翻譯失敗，請稍後再試。")
 
 def do_conversation(event, user_id: str, practice_sentence: str):
-    output = ask_gemini_multiturn(user_id, practice_sentence)
+    output = ask_gemini_multiturn(user_id, practice_sentence, system_instruction=CONVERSATION_SYSTEM_PROMPT)
     reply_text(event.reply_token, output)
 
 def do_pronunciation(event, word: str):
@@ -1294,6 +1313,31 @@ MODE_MAPPING = {
 def handle_text_message(event):
     user_id = getattr(event.source, "user_id", "anonymous")
     user_input = event.message.text.strip()
+
+    # 0. 優先攔截「發音: 」前綴的快捷指令
+    if user_input.startswith("發音:") or user_input.startswith("發音："):
+        word = user_input[3:].strip()
+        audio_url = get_pronunciation_audio(word)
+        messages = [TextMessage(text=f"發音: {word}")]
+        if audio_url:
+            messages.append(
+                AudioMessage(
+                    original_content_url=audio_url,
+                    duration=2000
+                )
+            )
+        else:
+            messages.append(TextMessage(text="暫時無法提供此單字的發音音檔。"))
+            
+        with ApiClient(configuration) as api_client:
+            line_api = MessagingApi(api_client)
+            line_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=messages,
+                )
+            )
+        return
 
     # 1. 檢查是否為功能切換關鍵字
     if user_input in MODE_MAPPING:
