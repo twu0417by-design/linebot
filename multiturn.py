@@ -11,21 +11,25 @@ from PIL import Image
 from bs4 import BeautifulSoup
 from flask import Flask, abort, request, send_from_directory
 import markdown
+import re
 from google import genai
 from google.genai import types
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
-    ApiClient,
     Configuration,
-    ImageMessage,
-    AudioMessage,
+    ApiClient,
     MessagingApi,
     MessagingApiBlob,
     ReplyMessageRequest,
     TextMessage,
+    ImageMessage,
     FlexMessage,
     FlexContainer,
+    PushMessageRequest,
+    QuickReply,
+    QuickReplyItem,
+    MessageAction,
 )
 from linebot.v3.webhooks import ImageMessageContent, MessageEvent, TextMessageContent
 from supabase import Client, create_client
@@ -55,6 +59,13 @@ CONVERSATION_SYSTEM_PROMPT = """
    - 請用自然、口語的「英文」回應使用者剛才的話。
    - 回覆內容請控制在 2-4 句話內，保持簡潔易懂。
    - 在你的英文回覆結尾，必須問使用者一個相關的簡單英文問題，引導使用者回答，以維持一問一答的對話流程。
+"""
+
+QUIZ_SYSTEM_PROMPT = """
+你是一個客觀、簡潔的測驗系統。
+出題時：請直接根據提供的單字或範圍，出 3 題英文選擇題測驗（克漏字或意思選擇），並提供 4 個選項 (A/B/C/D)。
+批改時：使用者會直接輸入三個英文字母作為答案（例如：ABC 或 bca）。請直接比對答案，並計算答對題數，然後簡潔地給出每一題的解答與原因。絕對不需要任何多餘的老師口吻、寒暄或冗長的鼓勵對話。
+請一律使用繁體中文。
 """
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -95,6 +106,44 @@ class DailyWordItem(BaseModel):
     example: str = Field(description="英文例句，並附上中文翻譯，例如: 'This is an apple. (這是一個蘋果。)'")
 
 
+class UrlSummaryResult(BaseModel):
+    title: str = Field(description="文章或網頁的標題")
+    summary: str = Field(description="網頁內容的繁體中文重點摘要，約 50-100 字")
+    vocab_list: List[VocabItem] = Field(description="從該網頁內容中挑選出的 5 個進階英文單字")
+
+
+class GrammarPoint(BaseModel):
+    rule: str = Field(description="文法規則名稱或標題，例如：現在完成式、關係代名詞")
+    explanation: str = Field(description="詳細的繁體中文解釋與用法解析")
+
+class GrammarAnalysisResult(BaseModel):
+    sentence: str = Field(description="原句")
+    translation: str = Field(description="整句的繁體中文翻譯")
+    structure: str = Field(description="句子結構拆解，例如：主詞(I)+動詞(have)+受詞(apple)")
+    grammar_points: List[GrammarPoint] = Field(description="這句話中值得學習的重要文法觀念")
+
+
+class QuizOption(BaseModel):
+    label: str = Field(description="選項代號 (A/B/C/D)")
+    text: str = Field(description="選項內容")
+
+class QuizQuestion(BaseModel):
+    number: int = Field(description="題號 (1, 2, 3)")
+    question: str = Field(description="題目句子，需填空處用 ___ 表示")
+    options: List[QuizOption] = Field(description="四個選項")
+    answer: str = Field(description="正確答案代號 (A/B/C/D)")
+    explanation: str = Field(description="繁體中文詳解")
+
+class QuizGenerationResult(BaseModel):
+    title: str = Field(description="測驗標題，例如：多益單字測驗")
+    questions: List[QuizQuestion]
+
+class QuizGradingResult(BaseModel):
+    score_text: str = Field(description="分數標題，例如：答對 2/3 題！")
+    feedback: str = Field(description="總體鼓勵與回饋，約 20 字")
+    details: List[str] = Field(description="每一題的正確解答與使用者的錯誤糾正")
+
+
 class TranslationVocabItem(BaseModel):
     word: str = Field(description="文章中的關鍵英文單字或片語")
     meaning: str = Field(description="該單字或片語的中文解釋")
@@ -115,6 +164,435 @@ class PronunciationResult(BaseModel):
 
 
 # === Flex Message Generators ===
+
+def make_quiz_generation_flex(result: QuizGenerationResult) -> dict:
+    body_contents = [
+        {
+            "type": "text",
+            "text": result.title,
+            "weight": "bold",
+            "size": "xl",
+            "color": "#111111"
+        },
+        {
+            "type": "separator",
+            "margin": "md"
+        }
+    ]
+    
+    for q in result.questions:
+        body_contents.append(
+            {
+                "type": "text",
+                "text": f"Q{q.number}. {q.question}",
+                "weight": "bold",
+                "wrap": True,
+                "margin": "md",
+                "color": "#007BFF"
+            }
+        )
+        for opt in q.options:
+            body_contents.append(
+                {
+                    "type": "text",
+                    "text": f"({opt.label}) {opt.text}",
+                    "wrap": True,
+                    "size": "sm",
+                    "color": "#555555"
+                }
+            )
+        body_contents.append(
+            {
+                "type": "separator",
+                "margin": "md"
+            }
+        )
+        
+    body_contents.append(
+        {
+            "type": "text",
+            "text": "💡 請直接輸入三個英文字母作為答案 (例如：ABC)",
+            "size": "sm",
+            "color": "#8c8c8c",
+            "margin": "md",
+            "wrap": True
+        }
+    )
+
+    return {
+        "type": "bubble",
+        "size": "mega",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#FFC107",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "🎓 隨堂測驗",
+                    "color": "#ffffff",
+                    "weight": "bold",
+                    "size": "md"
+                }
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": body_contents
+        }
+    }
+
+def make_quiz_grading_flex(result: QuizGradingResult) -> dict:
+    contents = [
+        {
+            "type": "text",
+            "text": result.score_text,
+            "weight": "bold",
+            "size": "xl",
+            "color": "#E83E8C"
+        },
+        {
+            "type": "text",
+            "text": result.feedback,
+            "wrap": True,
+            "margin": "sm",
+            "color": "#666666"
+        },
+        {
+            "type": "separator",
+            "margin": "md"
+        }
+    ]
+    for d in result.details:
+        contents.append({
+            "type": "text",
+            "text": "📌 " + d,
+            "wrap": True,
+            "size": "sm",
+            "margin": "md",
+            "color": "#333333"
+        })
+        
+    return {
+        "type": "bubble",
+        "size": "mega",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#28A745",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "✅ 測驗批改結果",
+                    "color": "#ffffff",
+                    "weight": "bold",
+                    "size": "md"
+                }
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": contents
+        }
+    }
+
+
+def make_grammar_flex(result: GrammarAnalysisResult) -> dict:
+    grammar_contents = []
+    for g in result.grammar_points:
+        grammar_contents.extend([
+            {
+                "type": "text",
+                "text": f"📌 {g.rule}",
+                "weight": "bold",
+                "size": "sm",
+                "color": "#007BFF",
+                "margin": "md"
+            },
+            {
+                "type": "text",
+                "text": g.explanation,
+                "wrap": True,
+                "size": "sm",
+                "color": "#333333",
+                "margin": "xs"
+            }
+        ])
+
+    return {
+        "type": "bubble",
+        "size": "mega",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#6f42c1",
+            "paddingAll": "15px",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "📖 文法拆解與分析",
+                    "color": "#ffffff",
+                    "weight": "bold",
+                    "size": "md"
+                }
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "paddingAll": "20px",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": result.sentence,
+                    "weight": "bold",
+                    "size": "md",
+                    "wrap": True,
+                    "color": "#111111",
+                    "style": "italic"
+                },
+                {
+                    "type": "separator",
+                    "margin": "lg"
+                },
+                {
+                    "type": "text",
+                    "text": "📝 中文翻譯：",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#8c8c8c",
+                    "margin": "md"
+                },
+                {
+                    "type": "text",
+                    "text": result.translation,
+                    "wrap": True,
+                    "margin": "sm",
+                    "size": "md",
+                    "color": "#333333"
+                },
+                {
+                    "type": "separator",
+                    "margin": "lg"
+                },
+                {
+                    "type": "text",
+                    "text": "🧩 結構拆解：",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#8c8c8c",
+                    "margin": "md"
+                },
+                {
+                    "type": "text",
+                    "text": result.structure,
+                    "wrap": True,
+                    "margin": "sm",
+                    "size": "sm",
+                    "color": "#E83E8C",
+                    "weight": "bold"
+                },
+                {
+                    "type": "separator",
+                    "margin": "lg"
+                }
+            ] + grammar_contents
+        }
+    }
+
+
+def make_url_summary_flex(result: UrlSummaryResult, url: str) -> dict:
+    vocab_contents = []
+    for v in result.vocab_list:
+        vocab_contents.append({
+            "type": "box",
+            "layout": "horizontal",
+            "margin": "md",
+            "alignItems": "center",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": v.word,
+                    "weight": "bold",
+                    "color": "#1DB446",
+                    "size": "sm",
+                    "flex": 4
+                },
+                {
+                    "type": "text",
+                    "text": f"{v.meaning} ({v.category})",
+                    "color": "#666666",
+                    "size": "sm",
+                    "flex": 6
+                },
+                {
+                    "type": "text",
+                    "text": "🔊",
+                    "align": "end",
+                    "size": "sm",
+                    "action": {
+                        "type": "message",
+                        "label": "發音",
+                        "text": f"發音: {v.word}"
+                    },
+                    "flex": 1
+                }
+            ]
+        })
+        
+    return {
+        "type": "bubble",
+        "size": "mega",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#FF5722",
+            "paddingAll": "15px",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "🔗 網頁重點摘要",
+                    "color": "#ffffff",
+                    "weight": "bold",
+                    "size": "md"
+                }
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "paddingAll": "20px",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": result.title,
+                    "weight": "bold",
+                    "size": "md",
+                    "wrap": True,
+                    "color": "#111111"
+                },
+                {
+                    "type": "separator",
+                    "margin": "lg"
+                },
+                {
+                    "type": "text",
+                    "text": "📝 摘要：",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#8c8c8c",
+                    "margin": "md"
+                },
+                {
+                    "type": "text",
+                    "text": result.summary,
+                    "wrap": True,
+                    "margin": "sm",
+                    "size": "sm",
+                    "color": "#333333"
+                },
+                {
+                    "type": "separator",
+                    "margin": "lg"
+                },
+                {
+                    "type": "text",
+                    "text": "💡 必學單字 (已存入單字庫)：",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#8c8c8c",
+                    "margin": "md"
+                },
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": vocab_contents
+                }
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "button",
+                    "style": "link",
+                    "action": {
+                        "type": "uri",
+                        "label": "開啟原始網頁",
+                        "uri": url
+                    },
+                    "color": "#007BFF"
+                }
+            ]
+        }
+    }
+
+
+def make_general_chat_flex(user_input: str, reply_text: str) -> dict:
+    return {
+        "type": "bubble",
+        "size": "mega",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#2B3A4C",
+            "paddingAll": "15px",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "✨ AI 語言助教",
+                    "color": "#FFFFFF",
+                    "weight": "bold",
+                    "size": "md"
+                }
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "paddingAll": "20px",
+            "contents": [
+                {
+                    "type": "box",
+                    "layout": "horizontal",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "💬",
+                            "size": "sm",
+                            "flex": 1
+                        },
+                        {
+                            "type": "text",
+                            "text": user_input,
+                            "wrap": True,
+                            "size": "sm",
+                            "color": "#8c8c8c",
+                            "weight": "bold",
+                            "flex": 9
+                        }
+                    ]
+                },
+                {
+                    "type": "separator",
+                    "margin": "lg",
+                    "color": "#EEEEEE"
+                },
+                {
+                    "type": "text",
+                    "text": reply_text,
+                    "wrap": True,
+                    "margin": "lg",
+                    "size": "md",
+                    "color": "#333333"
+                }
+            ]
+        }
+    }
+
 
 def make_translation_flex(result: TranslationResult) -> dict:
     vocab_contents = []
@@ -1170,8 +1648,29 @@ def callback():
     return "OK"
 
 
+# === Quick Reply Menu ===
+
+def send_quiz_menu(event):
+    quick_reply = QuickReply(
+        items=[
+            QuickReplyItem(action=MessageAction(label="📚 單字庫測驗", text="馬上測驗")),
+            QuickReplyItem(action=MessageAction(label="💼 多益 (TOEIC)", text="測驗 多益")),
+            QuickReplyItem(action=MessageAction(label="🎓 雅思 (IELTS)", text="測驗 雅思")),
+            QuickReplyItem(action=MessageAction(label="📈 商業英文", text="測驗 商業英文"))
+        ]
+    )
+    with ApiClient(configuration) as api_client:
+        line_api = MessagingApi(api_client)
+        line_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[TextMessage(text="請選擇你要進行的測驗範圍：\n(若選擇單字庫測驗，將優先從你的記憶庫出題)", quick_reply=quick_reply)]
+            )
+        )
+
 # === User Mode Management ===
 user_modes_memory = {}
+quiz_memory = {}
 
 def get_user_mode(user_id: str) -> str:
     if supabase:
@@ -1192,6 +1691,195 @@ def set_user_mode(user_id: str, mode: str):
             app.logger.warning(f"Failed to set user mode in Supabase: {e}. Saved in memory.")
 
 # === Sub-handlers for each feature ===
+
+def do_url_summary(event, user_id: str, url: str):
+    if not gemini_client:
+        reply_text(event.reply_token, "尚未設定 GEMINI_API_KEY，請先設定。")
+        return
+    try:
+        reply_text(event.reply_token, "⏳ 正在讀取網頁並由 AI 摘要中，請稍候...")
+        # 抓取網頁
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.content, "html.parser")
+        text = soup.get_text(separator="\n", strip=True)[:15000]
+
+        prompt = f"這是一篇來自網頁的內容：\n\n{text}\n\n請根據內容，產生繁體中文的重點摘要，並從中挑選5個進階英文單字。"
+        
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=UrlSummaryResult,
+            ),
+            contents=prompt,
+        )
+        result = response.parsed
+        
+        # 存入單字庫
+        for v in result.vocab_list:
+            add_vocab(user_id, v.category, v.word, v.meaning)
+
+        flex_content = make_url_summary_flex(result, url)
+        
+        with ApiClient(configuration) as api_client:
+            line_api = MessagingApi(api_client)
+            line_api.push_message(
+                PushMessageRequest(
+                    to=user_id,
+                    messages=[FlexMessage(
+                        alt_text="🔗 網頁摘要已完成",
+                        contents=FlexContainer.from_json(json.dumps(flex_content))
+                    )]
+                )
+            )
+    except Exception as e:
+        app.logger.error(f"URL Summary error: {e}")
+        with ApiClient(configuration) as api_client:
+            line_api = MessagingApi(api_client)
+            line_api.push_message(PushMessageRequest(to=user_id, messages=[TextMessage(text="❌ 無法讀取該網址內容或解析失敗，請確認網址是否正確且允許讀取。")]))
+
+
+def do_grammar_analysis(event, sentence: str):
+    if not gemini_client:
+        reply_text(event.reply_token, "尚未設定 GEMINI_API_KEY，請先設定。")
+        return
+    try:
+        prompt = f"請幫我分析以下英文句子的文法結構與重點：\n\n{sentence}"
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=GrammarAnalysisResult,
+            ),
+            contents=prompt,
+        )
+        result = response.parsed
+        flex_content = make_grammar_flex(result)
+        
+        with ApiClient(configuration) as api_client:
+            line_api = MessagingApi(api_client)
+            line_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[FlexMessage(
+                        alt_text="📖 文法拆解完成",
+                        contents=FlexContainer.from_json(json.dumps(flex_content))
+                    )]
+                )
+            )
+    except Exception as e:
+        app.logger.error(f"Grammar analysis error: {e}")
+        reply_text(event.reply_token, "文法分析失敗，請檢查句子或稍後再試。")
+
+
+def do_quiz(event, user_id: str, user_input: str = "", start: bool = False, scope: str = ""):
+    if not gemini_client:
+        reply_text(event.reply_token, "尚未設定 GEMINI_API_KEY，請先設定。")
+        return
+        
+    if start:
+        prompt = ""
+        if scope:
+            prompt = f"請幫我出 3 題關於「{scope}」的英文選擇題測驗。"
+        else:
+            if supabase:
+                try:
+                    res = supabase.table("vocab_memory").select("word,meaning").eq("user_id", user_id).execute()
+                    data = res.data or []
+                    if len(data) < 3:
+                        prompt = "使用者單字庫目前單字不足，請幫我隨機出 3 題初中級的英文單字或文法選擇題測驗。"
+                    else:
+                        words = random.sample(data, 3)
+                        words_str = ", ".join([f"{w['word']} ({w['meaning']})" for w in words])
+                        prompt = f"請用這三個單字幫我出 3 題英文選擇題測驗：{words_str}。"
+                except Exception as e:
+                    app.logger.error(f"Quiz fetch error: {e}")
+                    prompt = "請隨機出 3 題初中級的英文單字選擇題測驗。"
+            else:
+                prompt = "請隨機出 3 題初中級的英文單字選擇題測驗。"
+        
+        try:
+            response = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=QuizGenerationResult,
+                    system_instruction=QUIZ_SYSTEM_PROMPT
+                ),
+                contents=prompt,
+            )
+            result = response.parsed
+            
+            # Save to chat history so Gemini remembers the correct answers for grading
+            save_chat_history(user_id, "user", prompt)
+            save_chat_history(user_id, "model", response.text)
+            quiz_memory[user_id] = response.text
+            
+            flex_content = make_quiz_generation_flex(result)
+            with ApiClient(configuration) as api_client:
+                line_api = MessagingApi(api_client)
+                line_api.reply_message(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[FlexMessage(
+                            alt_text="🎓 新的隨堂測驗來囉",
+                            contents=FlexContainer.from_json(json.dumps(flex_content))
+                        )]
+                    )
+                )
+        except Exception as e:
+            app.logger.error(f"Quiz Generation error: {e}")
+            reply_text(event.reply_token, "測驗產生失敗，請稍後再試。")
+    else:
+        # Grading
+        quiz_json = quiz_memory.get(user_id, "")
+        if not quiz_json and supabase:
+            try:
+                rows = supabase.table("chat_history").select("role,content").eq("user_id", user_id).order("id", desc=True).limit(10).execute().data or []
+                for r in rows:
+                    if r["role"] == "model" and "questions" in r["content"]:
+                        quiz_json = r["content"]
+                        break
+            except Exception:
+                pass
+                
+        if not quiz_json:
+            reply_text(event.reply_token, "⚠️ 找不到剛剛的測驗題目，請重新輸入「測驗」來產生新題目。")
+            return
+            
+        prompt = f"以下是剛才出給使用者的測驗題目資料：\n{quiz_json}\n\n使用者的答案是：\n{user_input}\n\n請根據上方的測驗題目資料進行正確解答的比對批改，計算分數，並給予詳解，絕對不要自己發明新的題目。"
+        
+        try:
+            response = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=QuizGradingResult,
+                    system_instruction=QUIZ_SYSTEM_PROMPT
+                ),
+                contents=prompt,
+            )
+            result = response.parsed
+            save_chat_history(user_id, "user", user_input)
+            save_chat_history(user_id, "model", result.score_text + " " + result.feedback)
+            
+            flex_content = make_quiz_grading_flex(result)
+            with ApiClient(configuration) as api_client:
+                line_api = MessagingApi(api_client)
+                line_api.reply_message(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[FlexMessage(
+                            alt_text="✅ 測驗批改結果",
+                            contents=FlexContainer.from_json(json.dumps(flex_content))
+                        )]
+                    )
+                )
+        except Exception as e:
+            app.logger.error(f"Quiz Grading error: {e}")
+            reply_text(event.reply_token, "批改失敗，可能格式不符，請重新輸入答案。")
+
 
 def do_translation(event, article: str):
     result = translate_article(article)
@@ -1314,10 +2002,13 @@ def do_daily_word(event, send_prompt: bool = False):
 
 MODE_MAPPING = {
     "翻譯": "translation",
+    "文法拆解": "grammar",
+    "文法": "grammar",
     "記憶新增": "vocab_add",
     "記憶查詢": "vocab_query",
     "每日單字": "daily_word",
     "會話": "conversation",
+    "英文會話": "general",
     "發音": "pronunciation",
     "退出": "general",
     "一般聊天": "general",
@@ -1329,6 +2020,11 @@ MODE_MAPPING = {
 def handle_text_message(event):
     user_id = getattr(event.source, "user_id", "anonymous")
     user_input = event.message.text.strip()
+
+    # 0. 優先攔截網址進行自動摘要
+    if user_input.startswith("http://") or user_input.startswith("https://"):
+        do_url_summary(event, user_id, user_input)
+        return
 
     # 0a. 優先攔截「記憶新增快捷:」前綴（翻譯卡片上的加入單字庫按鈕）
     if user_input.startswith("記憶新增快捷:") or user_input.startswith("記憶新增快捷："):
@@ -1381,6 +2077,22 @@ def handle_text_message(event):
             )
         return
 
+    # 0c. 攔截「測驗」前綴指令，支援指定範圍 (例如：測驗 多益)
+    if user_input == "測驗":
+        send_quiz_menu(event)
+        return
+        
+    if user_input.startswith("測驗") or user_input.startswith("隨堂測驗") or user_input == "馬上測驗":
+        scope = user_input.replace("馬上測驗", "").replace("隨堂測驗", "").replace("測驗", "").strip()
+        set_user_mode(user_id, "quiz")
+        do_quiz(event, user_id, start=True, scope=scope)
+        return
+
+    # 0d. 攔截測驗答案 (3個 A-D 的字母組合，例如 ABC, bca)
+    if re.fullmatch(r"[A-Da-d]{3}", user_input):
+        do_quiz(event, user_id, user_input=user_input, start=False)
+        return
+
     # 1. 檢查是否為功能切換關鍵字
     if user_input in MODE_MAPPING:
         target_mode = MODE_MAPPING[user_input]
@@ -1391,6 +2103,13 @@ def handle_text_message(event):
                 event.reply_token,
                 "已切換至【翻譯】模式 📝\n"
                 "請直接輸入要翻譯的文字或文章，我會為您翻譯並解析關鍵單字！\n\n"
+                "💡 若要回到一般聊天，請輸入「退出」或「一般聊天」。"
+            )
+        elif target_mode == "grammar":
+            reply_text(
+                event.reply_token,
+                "已切換至【文法拆解】模式 📖\n"
+                "請輸入您覺得困難的英文長句，我會幫您拆解句子結構並解說文法！\n\n"
                 "💡 若要回到一般聊天，請輸入「退出」或「一般聊天」。"
             )
         elif target_mode == "vocab_add":
@@ -1425,8 +2144,8 @@ def handle_text_message(event):
         else: # general
             reply_text(
                 event.reply_token,
-                "已回到【一般聊天】模式 💬\n"
-                "現在您可以與我隨意對話，或隨時點選選單切換至其他功能。"
+                "已切換至【英文會話】模式 💬\n"
+                "現在您可以與我隨意對話，我會自動用語音及文字與您進行英文交流，或隨時點選選單切換至其他功能。"
             )
         return
 
@@ -1435,6 +2154,10 @@ def handle_text_message(event):
     
     if current_mode == "translation":
         do_translation(event, user_input)
+    elif current_mode == "grammar":
+        do_grammar_analysis(event, user_input)
+    elif current_mode == "quiz":
+        do_quiz(event, user_id, user_input=user_input, start=False)
     elif current_mode == "vocab_add":
         do_vocab_add(event, user_id, user_input)
     elif current_mode == "vocab_query":
@@ -1447,9 +2170,20 @@ def handle_text_message(event):
     elif current_mode == "pronunciation":
         do_pronunciation(event, user_input)
     else: # general / None
-        # 一般聊天直接使用多輪會話功能
-        output = ask_gemini_multiturn(user_id, user_input)
-        reply_text(event.reply_token, output)
+        # 一般聊天直接使用多輪會話功能，並預設為會話演練教練
+        output = ask_gemini_multiturn(user_id, user_input, system_instruction=CONVERSATION_SYSTEM_PROMPT)
+        flex_content = make_general_chat_flex(user_input, output)
+        with ApiClient(configuration) as api_client:
+            line_api = MessagingApi(api_client)
+            line_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[FlexMessage(
+                        alt_text="🗣️ 會話演練回覆",
+                        contents=FlexContainer.from_json(json.dumps(flex_content))
+                    )]
+                )
+            )
 
 
 

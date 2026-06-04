@@ -26,26 +26,24 @@ def init_rich_menu():
         "Content-Type": "application/json"
     }
     
-    # 1. 取得現有的 rich menu 列表
-    print("正在查詢現有的 Rich Menu...")
+    # 1. 取得現有的 rich menu 列表並全部刪除
+    print("正在清理舊的 Rich Menu...")
     try:
         res = requests.get("https://api.line.me/v2/bot/richmenu/list", headers={"Authorization": f"Bearer {token}"})
         res.raise_for_status()
         rich_menus = res.json().get("richmenus", [])
+        for menu in rich_menus:
+            menu_id = menu.get("richMenuId")
+            print(f"刪除舊的 Rich Menu: {menu_id}")
+            requests.delete(f"https://api.line.me/v2/bot/richmenu/{menu_id}", headers={"Authorization": f"Bearer {token}"})
     except Exception as e:
-        print(f"❌ 無法連線至 LINE API 或 Token 無效：{e}")
-        return False
+        print(f"❌ 清理舊 Rich Menu 失敗：{e}")
         
     target_menu_id = None
-    for menu in rich_menus:
-        if menu.get("name") == "Language Learning Rich Menu":
-            target_menu_id = menu.get("richMenuId")
-            print(f"找到現有的 Rich Menu ID: {target_menu_id}")
-            break
             
     # 2. 如果不存在，則建立新的 Rich Menu
     if not target_menu_id:
-        print("未找到對應的 Rich Menu，正在建立...")
+        print("正在建立新的 Rich Menu...")
         rich_menu_data = {
             "size": {
                 "width": 2500,
@@ -61,23 +59,23 @@ def init_rich_menu():
                 },
                 {
                     "bounds": {"x": 833, "y": 0, "width": 833, "height": 843},
-                    "action": {"type": "message", "label": "記憶新增", "text": "記憶新增"}
+                    "action": {"type": "message", "label": "文法", "text": "文法"}
                 },
                 {
                     "bounds": {"x": 1666, "y": 0, "width": 834, "height": 843},
-                    "action": {"type": "message", "label": "記憶查詢", "text": "記憶查詢"}
-                },
-                {
-                    "bounds": {"x": 0, "y": 843, "width": 833, "height": 843},
                     "action": {"type": "message", "label": "每日單字", "text": "每日單字"}
                 },
                 {
+                    "bounds": {"x": 0, "y": 843, "width": 833, "height": 843},
+                    "action": {"type": "message", "label": "測驗", "text": "測驗"}
+                },
+                {
                     "bounds": {"x": 833, "y": 843, "width": 833, "height": 843},
-                    "action": {"type": "message", "label": "會話", "text": "會話"}
+                    "action": {"type": "message", "label": "記憶查詢", "text": "記憶查詢"}
                 },
                 {
                     "bounds": {"x": 1666, "y": 843, "width": 834, "height": 843},
-                    "action": {"type": "message", "label": "發音", "text": "發音"}
+                    "action": {"type": "message", "label": "英文會話", "text": "英文會話"}
                 }
             ]
         }
@@ -94,7 +92,7 @@ def init_rich_menu():
             return False
             
     # 3. 上傳 Rich Menu 圖片
-    img_path = "rich_menu.jpg"
+    img_path = "rich_menu_compressed.jpg"
     if not os.path.exists(img_path):
         print(f"❌ 錯誤：找不到 {img_path} 圖片。請確認圖片是否存在。")
         return False
