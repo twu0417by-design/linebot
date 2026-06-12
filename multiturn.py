@@ -2632,7 +2632,9 @@ def handle_text_message(event):
             reply_text(
                 event.reply_token,
                 "已切換至【翻譯】模式 📝\n"
-                "請直接輸入要翻譯的文字或文章，我會為您翻譯並解析關鍵單字！"
+                "👉 請直接輸入要翻譯的文字或文章\n"
+                "👉 或是貼上「網址」，我會自動為您摘要內容\n"
+                "👉 也可以直接傳送「照片」，我會分析畫面並教您 5 個相關單字喔！"
             )
         elif target_mode == "grammar":
             reply_text(
