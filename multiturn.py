@@ -2243,11 +2243,12 @@ def do_quiz(event, user_id: str, user_input: str = "", start: bool = False, scop
         
     if start:
         prompt = ""
-        mode = scope if scope in ["選擇", "填空", "閱讀", "聽寫"] else "選擇"
-        is_library_mode = scope in ["選擇", "填空", "閱讀", "聽寫", ""]
+        parts = scope.split()
+        mode = parts[0] if len(parts) > 0 and parts[0] in ["選擇", "填空", "閱讀", "聽寫"] else "選擇"
+        level = parts[1] if len(parts) > 1 and parts[1] in ["初級", "中級", "高級", "單字庫"] else "單字庫"
         
         if mode == "聽寫":
-            handle_dictation_start(event, user_id)
+            handle_dictation_start(event, user_id, level)
             return
             
         if level == "單字庫":
