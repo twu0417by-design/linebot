@@ -1991,7 +1991,7 @@ def send_quiz_menu(event):
                     {
                         "type": "button",
                         "style": "secondary",
-                        "action": {"type": "message", "label": "選擇題", "text": f"測驗 選擇 {s['level']}"}
+                        "action": {"type": "message", "label": "單字題", "text": f"測驗 單字 {s['level']}"}
                     },
                     {
                         "type": "button",
@@ -2289,7 +2289,7 @@ def do_quiz(event, user_id: str, user_input: str = "", start: bool = False, scop
     if start:
         prompt = ""
         parts = scope.split()
-        mode = parts[0] if len(parts) > 0 and parts[0] in ["選擇", "填空", "閱讀", "聽寫"] else "選擇"
+        mode = parts[0] if len(parts) > 0 and parts[0] in ["單字", "選擇", "填空", "閱讀", "聽寫"] else "單字"
         level = parts[1] if len(parts) > 1 and parts[1] in ["初級", "中級", "高級", "單字庫"] else "單字庫"
         
         if mode in ["聽寫", "填空"]:
@@ -2302,7 +2302,7 @@ def do_quiz(event, user_id: str, user_input: str = "", start: bool = False, scop
                     res = supabase.table("vocab_memory").select("word,meaning").eq("user_id", user_id).execute()
                     data = res.data or []
                     if len(data) < 3:
-                        prompt = "使用者單字庫目前單字不足，請幫我隨機出 3 題初中級的英文選擇題測驗。"
+                        prompt = "使用者單字庫目前單字不足，請幫我隨機出 3 題初中級的英文單字選擇題測驗。"
                     else:
                         words = random.sample(data, 3)
                         words_str = ", ".join([f"{w['word']} ({w['meaning']})" for w in words])
@@ -2314,9 +2314,9 @@ def do_quiz(event, user_id: str, user_input: str = "", start: bool = False, scop
                             prompt = f"請用這三個單字幫我出 3 題英文「單字字義或用法選擇題」：{words_str}。"
                 except Exception as e:
                     app.logger.error(f"Quiz fetch error: {e}")
-                    prompt = "請隨機出 3 題初中級的英文選擇題測驗。"
+                    prompt = "請隨機出 3 題初中級的英文單字選擇題測驗。"
             else:
-                prompt = "請隨機出 3 題初中級的英文選擇題測驗。"
+                prompt = "請隨機出 3 題初中級的英文單字選擇題測驗。"
         else:
             # 外部題庫模式 (初級、中級、高級)
             if mode == "填空":
