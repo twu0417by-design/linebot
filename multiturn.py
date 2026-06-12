@@ -2603,9 +2603,9 @@ def handle_text_message(event):
     if user_id in typing_quiz_memory:
         if user_input in ["退出", "結束", "取消", "不玩了"]:
             del typing_quiz_memory[user_id]
-            reply_text(event.reply_token, "已結束聽寫測驗。")
+            reply_text(event.reply_token, "已結束測驗。")
             return
-        handle_dictation_answer(event, user_id, user_input)
+        handle_typing_quiz_answer(event, user_id, user_input)
         return
 
     # 0. 優先攔截網址進行自動摘要
