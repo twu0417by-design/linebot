@@ -92,7 +92,7 @@ def init_rich_menu():
             return False
             
     # 3. 上傳 Rich Menu 圖片
-    img_path = "rich_menu_compressed.jpg"
+    img_path = "rich_menu1.jpg"
     if not os.path.exists(img_path):
         print(f"❌ 錯誤：找不到 {img_path} 圖片。請確認圖片是否存在。")
         return False

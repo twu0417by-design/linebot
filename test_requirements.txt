@@ -1,7 +1,0 @@
-Flask
-gunicorn
-line-bot-sdk
-markdown
-beautifulsoup4
-openai
-google-genai
