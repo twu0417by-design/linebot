@@ -2382,7 +2382,7 @@ def do_quiz(event, user_id: str, user_input: str = "", start: bool = False, scop
             reply_text(event.reply_token, "⚠️ 找不到剛剛的測驗題目，請重新輸入「測驗」來產生新題目。")
             return
             
-        prompt = f"以下是剛才出給使用者的測驗題目資料：\n{quiz_json}\n\n使用者的答案是：\n{user_input}\n\n請根據上方的測驗題目資料進行正確解答的比對批改，計算分數，並給予詳解，絕對不要自己發明新的題目。"
+        prompt = f"以下是剛才出給使用者的測驗題目資料：\n{quiz_json}\n\n使用者的答案是：\n{user_input}\n\n請進行比對批改。如果使用者輸入了 A/B/C/D 以外的無效內容（且無法對應到正確答案的文字），請在 feedback 中友善提醒『請輸入正確的選項代號（如 ABC）』，且分數判定為答錯。"
         
         try:
             response = gemini_client.models.generate_content(
