@@ -2197,7 +2197,7 @@ quiz_memory = {}
 def get_user_mode(user_id: str) -> str:
     if supabase:
         try:
-            res = supabase.table("user_states").select("mode").eq("user_id", user_id).execute()
+            res = supabase.table("user_states").select("mode").eq("user_id", user_id).order("id", desc=True).limit(1).execute()
             if res.data:
                 return res.data[0]["mode"]
         except Exception as e:
@@ -2208,7 +2208,11 @@ def set_user_mode(user_id: str, mode: str):
     user_modes_memory[user_id] = mode
     if supabase:
         try:
-            supabase.table("user_states").upsert({"user_id": user_id, "mode": mode}).execute()
+            res = supabase.table("user_states").select("id").eq("user_id", user_id).execute()
+            if res.data:
+                supabase.table("user_states").update({"mode": mode}).eq("user_id", user_id).execute()
+            else:
+                supabase.table("user_states").insert({"user_id": user_id, "mode": mode}).execute()
         except Exception as e:
             app.logger.warning(f"Failed to set user mode in Supabase: {e}. Saved in memory.")
 
