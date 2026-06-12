@@ -2183,16 +2183,6 @@ def handle_typing_quiz_answer(event, user_id: str, user_input: str):
             line_api = MessagingApi(api_client)
             line_api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=messages))
         
-    next_word = state["words"][idx]
-    audio_url = get_pronunciation_audio(next_word["word"])
-    
-    messages = [TextMessage(text=f"{feedback}\n\n---\n🎧 第 {idx+1} 題：請聽語音，並輸入正確的單字！\n提示：{next_word['meaning']}")]
-    if audio_url:
-        messages.append(AudioMessage(original_content_url=audio_url, duration=2000))
-        
-    with ApiClient(configuration) as api_client:
-        line_api = MessagingApi(api_client)
-        line_api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=messages))
 
 
 def parse_gemini_json(response, schema_class):
