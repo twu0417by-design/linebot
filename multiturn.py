@@ -96,6 +96,7 @@ os.makedirs(static_tmp_path, exist_ok=True)
 
 class VocabItem(BaseModel):
     word: str = Field(description="英文單字，例如: 'apple'")
+    part_of_speech: str = Field(description="詞性（必須使用英文縮寫，如 n., v., adj., adv.）", default="")
     meaning: str = Field(description="該單字的繁體中文意思，例如: '蘋果'")
     category: str = Field(description="該單字最適合的中文分類，必須使用繁體中文，例如: '食物'、'動物'、'交通'、'文具'")
 
@@ -450,7 +451,7 @@ def make_url_summary_flex(result: UrlSummaryResult, url: str) -> dict:
                 },
                 {
                     "type": "text",
-                    "text": f"{v.meaning} ({v.category})",
+                    "text": f"[{v.part_of_speech or ''}] {v.meaning} ({v.category})" if v.part_of_speech else f"{v.meaning} ({v.category})",
                     "color": "#666666",
                     "size": "sm",
                     "flex": 6
@@ -931,7 +932,7 @@ def make_daily_word_flex(item: DailyWordItem) -> dict:
                     "action": {
                         "type": "message",
                         "label": "➕ 收藏",
-                        "text": f"記憶新增快捷: 每日單字|{item.word or ''}|{item.meaning or ''}"
+                        "text": f"記憶新增快捷: 每日單字|{item.word or ''}|({item.part_of_speech or ''}) {item.meaning or ''}" if item.part_of_speech else f"記憶新增快捷: 每日單字|{item.word or ''}|{item.meaning or ''}"
                     }
                 }
             ]
@@ -1051,7 +1052,7 @@ def make_pronunciation_flex(result: PronunciationResult) -> dict:
                     "action": {
                         "type": "message",
                         "label": "💾 加入單字庫",
-                        "text": f"記憶新增快捷: 發音收藏|{result.word}|{result.meaning}"
+                        "text": f"記憶新增快捷: 發音收藏|{result.word}|({result.part_of_speech}) {result.meaning}" if result.part_of_speech else f"記憶新增快捷: 發音收藏|{result.word}|{result.meaning}"
                     }
                 }
             ]
@@ -1432,7 +1433,7 @@ def make_image_analysis_flex(result: ImageAnalysisResult, saved_count: int) -> d
                 },
                 {
                     "type": "text",
-                    "text": item.meaning,
+                    "text": f"[{item.part_of_speech or ''}] {item.meaning}" if getattr(item, 'part_of_speech', None) else item.meaning,
                     "color": "#666666",
                     "size": "sm",
                     "flex": 4
